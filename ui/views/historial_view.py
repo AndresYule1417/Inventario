@@ -183,11 +183,6 @@ class HistorialView(QWidget):
             top_charts_container = QWidget()
             top_charts_layout = QHBoxLayout(top_charts_container)
             
-            # Gráfica de línea (entradas y salidas por meses)
-            chart_entradas_salidas = self.crear_grafica_entradas_salidas(cursor, codigo)
-            chart_view1 = self.crear_chart_view(chart_entradas_salidas)
-            top_charts_layout.addWidget(chart_view1)
-            
             # Gráfica de stock
             chart_stock = self.crear_grafica_stock(cursor, codigo)
             chart_view2 = self.crear_chart_view(chart_stock)
@@ -219,72 +214,6 @@ class HistorialView(QWidget):
             
         self.stacked_widget.setCurrentIndex(1)
 
-    def crear_grafica_entradas_salidas(self, cursor, codigo):
-        query_entradas_salidas = """
-        SELECT strftime('%Y-%m', fecha) as mes, 
-               SUM(CASE WHEN tipo_movimiento = 'Entrada' THEN cantidad ELSE 0 END) as entradas,
-               SUM(CASE WHEN tipo_movimiento = 'Salida' THEN cantidad ELSE 0 END) as salidas
-        FROM (
-            SELECT fecha, 'Entrada' as tipo_movimiento, cantidad
-            FROM entradas
-            WHERE codigo = ?
-            UNION ALL
-            SELECT fecha, 'Salida' as tipo_movimiento, cantidad
-            FROM salidas
-            WHERE codigo = ?
-        )
-        GROUP BY mes
-        ORDER BY mes
-        """
-        
-        cursor.execute(query_entradas_salidas, (codigo, codigo))
-        datos_entradas_salidas = cursor.fetchall()
-        
-        chart = QChart()
-        series_entradas = QLineSeries()
-        series_salidas = QLineSeries()
-        
-        # Establecer colores y estilos
-        pen_entradas = series_entradas.pen()
-        pen_entradas.setWidth(2)
-        pen_entradas.setColor(QColor("#2ecc71"))
-        series_entradas.setPen(pen_entradas)
-        series_entradas.setName("Entradas")
-        
-        pen_salidas = series_salidas.pen()
-        pen_salidas.setWidth(2)
-        pen_salidas.setColor(QColor("#e74c3c"))
-        series_salidas.setPen(pen_salidas)
-        series_salidas.setName("Salidas")
-        
-        for mes, entradas, salidas in datos_entradas_salidas:
-            dt = QDateTime.fromString(mes, "yyyy-MM")
-            series_entradas.append(dt.toMSecsSinceEpoch(), entradas)
-            series_salidas.append(dt.toMSecsSinceEpoch(), salidas)
-        
-        chart.addSeries(series_entradas)
-        chart.addSeries(series_salidas)
-        
-        # Configurar ejes
-        axis_x = QDateTimeAxis()
-        axis_x.setFormat("MM/yyyy")
-        axis_x.setTitleText("Mes")
-        chart.addAxis(axis_x, Qt.AlignmentFlag.AlignBottom)
-        series_entradas.attachAxis(axis_x)
-        series_salidas.attachAxis(axis_x)
-        
-        axis_y = QValueAxis()
-        axis_y.setTitleText("Cantidad")
-        axis_y.setLabelsAngle(-90)
-        chart.addAxis(axis_y, Qt.AlignmentFlag.AlignLeft)
-        series_entradas.attachAxis(axis_y)
-        series_salidas.attachAxis(axis_y)
-        
-        chart.setTitle("Movimientos por Mes")
-        chart.setAnimationOptions(QChart.AnimationOption.SeriesAnimations)
-        chart.legend().setAlignment(Qt.AlignmentFlag.AlignBottom)
-        
-        return chart
 
     def crear_grafica_stock(self, cursor, codigo):
         query_stock = """
@@ -422,16 +351,23 @@ class HistorialView(QWidget):
         query_observaciones = """
         WITH movimientos AS (
             SELECT e.fecha, 'Entrada' as tipo, e.cantidad,
-                   p.precio_compra, p.precio_venta
+                p.precio_compra, p.precio_venta
             FROM entradas e
             JOIN productos p ON e.codigo = p.codigo
             WHERE e.codigo = ?
             UNION ALL
             SELECT s.fecha, 'Salida' as tipo, s.cantidad,
-                   p.precio_compra, p.precio_venta
+                p.precio_compra, p.precio_venta
             FROM salidas s
             JOIN productos p ON s.codigo = p.codigo
             WHERE s.codigo = ?
+        ),
+        rotacion AS (
+            SELECT 
+                AVG(JULIANDAY(fecha)) as tiempo_promedio_permanencia,
+                CAST(SUM(CASE WHEN tipo = 'Entrada' THEN cantidad ELSE 0 END) AS FLOAT) / 
+                NULLIF(SUM(CASE WHEN tipo = 'Salida' THEN cantidad ELSE 0 END), 0) as indice_rotacion
+            FROM movimientos
         )
         SELECT 
             COUNT(*) as total_movimientos,
@@ -442,31 +378,144 @@ class HistorialView(QWidget):
             MIN(CASE WHEN tipo = 'Entrada' THEN precio_compra ELSE NULL END) as min_precio_compra,
             MAX(CASE WHEN tipo = 'Entrada' THEN precio_compra ELSE NULL END) as max_precio_compra,
             MIN(CASE WHEN tipo = 'Salida' THEN precio_venta ELSE NULL END) as min_precio_venta,
-            MAX(CASE WHEN tipo = 'Salida' THEN precio_venta ELSE NULL END) as max_precio_venta
+            MAX(CASE WHEN tipo = 'Salida' THEN precio_venta ELSE NULL END) as max_precio_venta,
+            COALESCE(r.tiempo_promedio_permanencia, 0) as tiempo_promedio_permanencia,
+            COALESCE(r.indice_rotacion, 0) as indice_rotacion
         FROM movimientos
+        LEFT JOIN rotacion r ON 1=1;
         """
         
         cursor.execute(query_observaciones, (codigo, codigo))
         datos = cursor.fetchone()
         
-        observaciones = "OBSERVACIONES:\n\n"
-        observaciones += f"1. Movimientos totales: {datos[0]}\n"
-        observaciones += f"   - Total entradas: {datos[1]}\n"
-        observaciones += f"   - Total salidas: {datos[2]}\n\n"
-        
-        observaciones += f"2. Promedios:\n"
-        observaciones += f"   - Promedio de entradas: {datos[3]:.2f}\n" if datos[3] is not None else "   - Promedio de entradas: N/A\n"
-        observaciones += f"   - Promedio de salidas: {datos[4]:.2f}\n" if datos[4] is not None else "   - Promedio de salidas: N/A\n\n"
-        
-        observaciones += f"3. Precios:\n"
-        observaciones += f"   - Rango de precio de compra: ${datos[5]:.2f} - ${datos[6]:.2f}\n" if datos[5] is not None and datos[6] is not None else "   - Rango de precio de compra: N/A\n"
-        observaciones += f"   - Rango de precio de venta: ${datos[7]:.2f} - ${datos[8]:.2f}\n" if datos[7] is not None and datos[8] is not None else "   - Rango de precio de venta: N/A\n"
-        
-        variacion_compra = ((datos[6] - datos[5]) / datos[5]) * 100 if datos[5] and datos[6] else 0
-        variacion_venta = ((datos[8] - datos[7]) / datos[7]) * 100 if datos[7] and datos[8] else 0
-        
-        observaciones += f"\n4. Variaciones de precio:\n"
-        observaciones += f"   - Variación en precio de compra: {variacion_compra:.2f}%\n" if variacion_compra else "   - Variación en precio de compra: N/A\n"
-        observaciones += f"   - Variación en precio de venta: {variacion_venta:.2f}%\n" if variacion_venta else "   - Variación en precio de venta: N/A\n"
-        
-        return observaciones
+        # Función auxiliar para formatear valores con colores
+        def format_value(value, format_str="{:.2f}", prefix="", suffix=""):
+            if value is None or (isinstance(value, (int, float)) and value == 0):
+                return '<span style="color: #6c757d;">N/A</span>'
+            formatted = prefix + format_str.format(value) + suffix
+            return f'<span style="color: #2c3e50; font-weight: 500;">{formatted}</span>'
+
+        # Función para crear una sección de tarjeta
+        def create_card_section(title, content):
+            return f'''
+                <div style="
+                    background: white;
+                    border-radius: 8px;
+                    padding: 15px;
+                    margin-bottom: 15px;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                    <div style="
+                        color: #3498db;
+                        font-weight: bold;
+                        font-size: 14px;
+                        margin-bottom: 10px;
+                        border-bottom: 2px solid #f0f0f0;
+                        padding-bottom: 5px;">
+                        {title}
+                    </div>
+                    {content}
+                </div>
+            '''
+
+        # Construir las secciones HTML
+        movimientos_content = f'''
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px;">
+                <div>Total movimientos: {format_value(datos[0], "{:,}")}</div>
+                <div>Total entradas: {format_value(datos[1], "{:,}")}</div>
+                <div>Total salidas: {format_value(datos[2], "{:,}")}</div>
+            </div>
+        '''
+
+        promedios_content = f'''
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px;">
+                <div>Promedio entradas: {format_value(datos[3], suffix="%")}</div>
+                <div>Promedio salidas: {format_value(datos[4], suffix="%")}</div>
+            </div>
+        '''
+
+        precios_content = f'''
+            <div style="display: grid; grid-template-columns: 1fr; gap: 10px;">
+                <div>Rango precio compra: {format_value(datos[5], prefix="$")} - {format_value(datos[6], prefix="$")}</div>
+                <div>Rango precio venta: {format_value(datos[7], prefix="$")} - {format_value(datos[8], prefix="$")}</div>
+            </div>
+        '''
+
+        variacion_compra = ((datos[6] - datos[5]) / datos[5] * 100) if datos[5] and datos[6] else 0
+        variacion_venta = ((datos[8] - datos[7]) / datos[7] * 100) if datos[7] and datos[8] else 0
+
+        variaciones_content = f'''
+            <div style="display: grid; grid-template-columns: 1fr; gap: 10px;">
+                <div>Variación precio compra: {format_value(variacion_compra, suffix="%")}</div>
+                <div>Variación precio venta: {format_value(variacion_venta, suffix="%")}</div>
+            </div>
+        '''
+
+        rotacion_content = f'''
+            <div style="display: grid; grid-template-columns: 1fr; gap: 10px;">
+                <div>Tiempo promedio permanencia: {format_value(datos[9], suffix=" días")}</div>
+                <div>Índice de rotación: {format_value(datos[10])}</div>
+            </div>
+        '''
+
+        # Combinar todas las secciones
+        observaciones_html = f'''
+            <div style="font-family: Arial, sans-serif; font-size: 13px; color: #444;">
+                {create_card_section("📊 Movimientos", movimientos_content)}
+                {create_card_section("📈 Promedios", promedios_content)}
+                {create_card_section("💰 Precios", precios_content)}
+                {create_card_section("📉 Variaciones", variaciones_content)}
+                {create_card_section("🔄 Rotación de Inventario", rotacion_content)}
+            </div>
+        '''
+
+        return observaciones_html
+
+    def mostrar_grafica(self):
+        codigo = self.search_input.text()
+        if not codigo:
+            return
+            
+        # Limpiar el layout de gráficas existente
+        for i in reversed(range(self.graficas_layout.count())): 
+            self.graficas_layout.itemAt(i).widget().setParent(None)
+
+        with self.db.connect() as conn:
+            cursor = conn.cursor()
+            
+            # Contenedor para las gráficas superiores
+            top_charts_container = QWidget()
+            top_charts_layout = QHBoxLayout(top_charts_container)
+            
+            # Gráfica de stock con diseño mejorado
+            chart_stock = self.crear_grafica_stock(cursor, codigo)
+            chart_view1 = self.crear_chart_view(chart_stock)
+            top_charts_layout.addWidget(chart_view1)
+            
+            # Gráfica de comparación con otros productos
+            chart_comparacion = self.crear_grafica_comparacion_productos(cursor)
+            chart_view2 = self.crear_chart_view(chart_comparacion, 350)
+            
+            self.graficas_layout.addWidget(top_charts_container)
+            self.graficas_layout.addWidget(chart_view2)
+            
+            # Cuadro de observaciones mejorado
+            observaciones = self.generar_observaciones(cursor, codigo)
+            observaciones_group = QGroupBox("Observaciones")
+            observaciones_layout = QVBoxLayout()
+            observaciones_label = QLabel(observaciones)
+            observaciones_label.setWordWrap(True)
+            observaciones_label.setTextFormat(Qt.TextFormat.RichText)  # Habilitar formato HTML
+            observaciones_label.setStyleSheet("""
+                QLabel {
+                    background-color: #f8f9fa;
+                    padding: 20px;
+                    border-radius: 12px;
+                    font-size: 13px;
+                    line-height: 1.5;
+                }
+            """)
+            observaciones_layout.addWidget(observaciones_label)
+            observaciones_group.setLayout(observaciones_layout)
+            self.graficas_layout.addWidget(observaciones_group)
+            
+        self.stacked_widget.setCurrentIndex(1)
