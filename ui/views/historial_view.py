@@ -185,33 +185,66 @@ class HistorialView(QWidget):
             
             # Gráfica de stock
             chart_stock = self.crear_grafica_stock(cursor, codigo)
-            chart_view2 = self.crear_chart_view(chart_stock)
-            top_charts_layout.addWidget(chart_view2)
+            chart_view1 = self.crear_chart_view(chart_stock)
+            top_charts_layout.addWidget(chart_view1)
+            
+            # Gráfica de comparación con otros productos
+            chart_comparacion = self.crear_grafica_comparacion_productos(cursor, codigo)  # Añadido el parámetro codigo
+            chart_view2 = self.crear_chart_view(chart_comparacion, 350)
             
             self.graficas_layout.addWidget(top_charts_container)
-            
-            # Gráfica de comparación con otros productos (abajo, ancho completo)
-            chart_comparacion = self.crear_grafica_comparacion_productos(cursor)
-            chart_view3 = self.crear_chart_view(chart_comparacion, 350)
-            self.graficas_layout.addWidget(chart_view3)
+            self.graficas_layout.addWidget(chart_view2)
             
             # Cuadro de observaciones
             observaciones = self.generar_observaciones(cursor, codigo)
             observaciones_group = QGroupBox("Observaciones")
+            observaciones_group.setStyleSheet("""
+                QGroupBox {
+                    background-color: #ffffff;
+                    border: 1px solid #e1e4e8;
+                    border-radius: 10px;
+                    margin-top: 15px;
+                    padding: 15px;
+                }
+                QGroupBox::title {
+                    background-color: #ffffff;
+                    padding: 5px 10px;
+                    color: #2d3748;
+                    font-weight: bold;
+                    font-size: 14px;
+                    subcontrol-origin: margin;
+                    subcontrol-position: top center;
+                    margin-top: -12px;
+                }
+            """)
+            
             observaciones_layout = QVBoxLayout()
+            observaciones_layout.setContentsMargins(15, 20, 15, 15)
+            observaciones_layout.setSpacing(10)
+            
             observaciones_label = QLabel(observaciones)
             observaciones_label.setWordWrap(True)
+            observaciones_label.setTextFormat(Qt.TextFormat.RichText)
             observaciones_label.setStyleSheet("""
-                background-color: #f8f9fa;
-                padding: 15px;
-                border-radius: 8px;
-                font-size: 12px;
-                line-height: 1.4;
+                QLabel {
+                    background-color: #f8f9fa;
+                    padding: 20px;
+                    border-radius: 12px;
+                    font-size: 13px;
+                    line-height: 1.5;
+                    color: #1a202c;
+                    border: 1px solid #edf2f7;
+                }
+                QLabel:hover {
+                    background-color: #edf2f7;
+                    transition: background-color 0.3s ease;
+                }
             """)
+            
             observaciones_layout.addWidget(observaciones_label)
             observaciones_group.setLayout(observaciones_layout)
             self.graficas_layout.addWidget(observaciones_group)
-            
+                
         self.stacked_widget.setCurrentIndex(1)
 
 
@@ -270,82 +303,93 @@ class HistorialView(QWidget):
         
         return chart
 
-    def crear_grafica_comparacion_productos(self, cursor):
-        query_comparacion = """
-        WITH total_movimientos AS (
-            SELECT p.codigo, p.descripcion,
-                   COALESCE(SUM(e.cantidad), 0) as entradas,
-                   COALESCE(SUM(s.cantidad), 0) as salidas
-            FROM productos p
-            LEFT JOIN entradas e ON p.codigo = e.codigo
-            LEFT JOIN salidas s ON p.codigo = s.codigo
-            GROUP BY p.codigo, p.descripcion
-        )
-        SELECT codigo, descripcion, entradas, salidas
-        FROM total_movimientos
-        WHERE entradas > 0 OR salidas > 0
-        ORDER BY (entradas + salidas) DESC
-        LIMIT 5
-        """
-        
-        cursor.execute(query_comparacion)
-        datos_comparacion = cursor.fetchall()
-        
-        chart = QChart()
-        
-        # Crear dos series separadas para entradas y salidas
-        series_entradas = QBarSeries()
-        series_salidas = QBarSeries()
-        
-        # Definir colores para las barras
-        set_entradas = QBarSet("Entradas")
-        set_entradas.setColor(QColor("#2ecc71"))  # Verde
-        
-        set_salidas = QBarSet("Salidas")
-        set_salidas.setColor(QColor("#e74c3c"))   # Rojo
-        
-        categorias = []
-        for codigo, descripcion, entradas, salidas in datos_comparacion:
-            # Agregar datos a cada set
-            set_entradas.append(entradas)
-            set_salidas.append(salidas)
-            # Usar descripción corta para las categorías
-            categorias.append(descripcion[:15] + "..." if len(descripcion) > 15 else descripcion)
-        
-        series_entradas.append(set_entradas)
-        series_salidas.append(set_salidas)
-        
-        chart.addSeries(series_entradas)
-        chart.addSeries(series_salidas)
-        
-        # Configurar eje X (categorías)
-        axis_x = QBarCategoryAxis()
-        axis_x.append(categorias)
-        chart.addAxis(axis_x, Qt.AlignmentFlag.AlignBottom)
-        series_entradas.attachAxis(axis_x)
-        series_salidas.attachAxis(axis_x)
-        
-        # Configurar eje Y (valores)
-        axis_y = QValueAxis()
-        axis_y.setTitleText("Cantidad")
-        axis_y.setLabelsAngle(-90)
-        
-        # Calcular el máximo valor para establecer el rango del eje Y
-        max_valor = max([max([e, s]) for _, _, e, s in datos_comparacion])
-        axis_y.setRange(0, max_valor * 1.1)  # Agregar 10% de espacio arriba
-        
-        chart.addAxis(axis_y, Qt.AlignmentFlag.AlignLeft)
-        series_entradas.attachAxis(axis_y)
-        series_salidas.attachAxis(axis_y)
-        
-        # Configurar título y leyenda
-        chart.setTitle("Comparación de Movimientos")
-        chart.legend().setAlignment(Qt.AlignmentFlag.AlignBottom)
-        
-        # Configurar animaciones
-        chart.setAnimationOptions(QChart.AnimationOption.SeriesAnimations)
-        
-        return chart
+    def crear_grafica_comparacion_productos(self, cursor, codigo_seleccionado):
+            query_comparacion = """
+            WITH total_movimientos AS (
+                SELECT 
+                    p.codigo, 
+                    p.descripcion,
+                    COALESCE(SUM(e.cantidad), 0) as entradas,
+                    COALESCE(SUM(s.cantidad), 0) as salidas,
+                    CASE WHEN p.codigo = ? THEN 1 ELSE 0 END as es_seleccionado,
+                    COALESCE(SUM(e.cantidad), 0) + COALESCE(SUM(s.cantidad), 0) as total_movimientos
+                FROM productos p
+                LEFT JOIN entradas e ON p.codigo = e.codigo
+                LEFT JOIN salidas s ON p.codigo = s.codigo
+                GROUP BY p.codigo, p.descripcion
+            )
+            SELECT 
+                codigo,
+                descripcion,
+                entradas,
+                salidas,
+                es_seleccionado,
+                total_movimientos
+            FROM total_movimientos
+            WHERE codigo = ?
+            OR codigo IN (
+                SELECT codigo
+                FROM total_movimientos
+                WHERE codigo != ?
+                ORDER BY total_movimientos DESC
+                LIMIT 4
+            )
+            ORDER BY es_seleccionado DESC, total_movimientos DESC
+            """
+            
+            cursor.execute(query_comparacion, (codigo_seleccionado, codigo_seleccionado, codigo_seleccionado))
+            datos_comparacion = cursor.fetchall()
+            
+            chart = QChart()
+            
+            series_entradas = QBarSeries()
+            series_salidas = QBarSeries()
+            
+            set_entradas = QBarSet("Entradas")
+            set_entradas.setColor(QColor("#2ecc71"))
+            
+            set_salidas = QBarSet("Salidas")
+            set_salidas.setColor(QColor("#e74c3c"))
+            
+            categorias = []
+            for codigo, descripcion, entradas, salidas, es_seleccionado, _ in datos_comparacion:
+                set_entradas.append(entradas)
+                set_salidas.append(salidas)
+                
+                # Resaltar el producto seleccionado en la descripción
+                nombre_categoria = descripcion[:15] + "..." if len(descripcion) > 15 else descripcion
+                if es_seleccionado:
+                    nombre_categoria = "➤ " + nombre_categoria
+                categorias.append(nombre_categoria)
+            
+            series_entradas.append(set_entradas)
+            series_salidas.append(set_salidas)
+            
+            chart.addSeries(series_entradas)
+            chart.addSeries(series_salidas)
+            
+            axis_x = QBarCategoryAxis()
+            axis_x.append(categorias)
+            chart.addAxis(axis_x, Qt.AlignmentFlag.AlignBottom)
+            series_entradas.attachAxis(axis_x)
+            series_salidas.attachAxis(axis_x)
+            
+            axis_y = QValueAxis()
+            axis_y.setTitleText("Cantidad")
+            axis_y.setLabelsAngle(-90)
+            
+            max_valor = max([max([e, s]) for _, _, e, s, _, _ in datos_comparacion])
+            axis_y.setRange(0, max_valor * 1.1)
+            
+            chart.addAxis(axis_y, Qt.AlignmentFlag.AlignLeft)
+            series_entradas.attachAxis(axis_y)
+            series_salidas.attachAxis(axis_y)
+            
+            chart.setTitle("Comparación de Movimientos")
+            chart.legend().setAlignment(Qt.AlignmentFlag.AlignBottom)
+            chart.setAnimationOptions(QChart.AnimationOption.SeriesAnimations)
+            
+            return chart
 
     def generar_observaciones(self, cursor, codigo):
         query_observaciones = """
@@ -470,52 +514,4 @@ class HistorialView(QWidget):
 
         return observaciones_html
 
-    def mostrar_grafica(self):
-        codigo = self.search_input.text()
-        if not codigo:
-            return
-            
-        # Limpiar el layout de gráficas existente
-        for i in reversed(range(self.graficas_layout.count())): 
-            self.graficas_layout.itemAt(i).widget().setParent(None)
-
-        with self.db.connect() as conn:
-            cursor = conn.cursor()
-            
-            # Contenedor para las gráficas superiores
-            top_charts_container = QWidget()
-            top_charts_layout = QHBoxLayout(top_charts_container)
-            
-            # Gráfica de stock con diseño mejorado
-            chart_stock = self.crear_grafica_stock(cursor, codigo)
-            chart_view1 = self.crear_chart_view(chart_stock)
-            top_charts_layout.addWidget(chart_view1)
-            
-            # Gráfica de comparación con otros productos
-            chart_comparacion = self.crear_grafica_comparacion_productos(cursor)
-            chart_view2 = self.crear_chart_view(chart_comparacion, 350)
-            
-            self.graficas_layout.addWidget(top_charts_container)
-            self.graficas_layout.addWidget(chart_view2)
-            
-            # Cuadro de observaciones mejorado
-            observaciones = self.generar_observaciones(cursor, codigo)
-            observaciones_group = QGroupBox("Observaciones")
-            observaciones_layout = QVBoxLayout()
-            observaciones_label = QLabel(observaciones)
-            observaciones_label.setWordWrap(True)
-            observaciones_label.setTextFormat(Qt.TextFormat.RichText)  # Habilitar formato HTML
-            observaciones_label.setStyleSheet("""
-                QLabel {
-                    background-color: #f8f9fa;
-                    padding: 20px;
-                    border-radius: 12px;
-                    font-size: 13px;
-                    line-height: 1.5;
-                }
-            """)
-            observaciones_layout.addWidget(observaciones_label)
-            observaciones_group.setLayout(observaciones_layout)
-            self.graficas_layout.addWidget(observaciones_group)
-            
-        self.stacked_widget.setCurrentIndex(1)
+    
